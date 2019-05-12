@@ -82,21 +82,19 @@ public class SimpleDynamoProvider extends ContentProvider {
 		ServerSocket serverSocket = null;
 		try {
 			serverSocket = new ServerSocket(SERVER_PORT);
+
 		} catch (IOException e) {
 			Log.e(TAG, "Can't create a ServerSocket");
 			e.printStackTrace();
 		}
 		new ServerTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, serverSocket);
-		String myKeys = "";
-		//get own value from next node
 		try {
 			String reply = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, String.valueOf(portNumbers[(getIndex(myPort) + 1) % 5]), "4" + myPort).get();
-			if(reply != null)
-				myKeys = reply;
-			reply = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, String.valueOf(portNumbers[(getIndex(myPort) + 4) % 5]), "4" + myPort).get();
-
-			if(reply != null)
-				myKeys = myKeys + "_" + reply;
+			insertKeys(portNumbers[(getIndex(myPort) + 1) % 5],reply);
+			reply = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, String.valueOf(portNumbers[(getIndex(myPort) + 4) % 5]), "5").get();
+			insertKeys(portNumbers[(getIndex(myPort) + 4) % 5],reply);
+			reply = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, String.valueOf(portNumbers[(getIndex(myPort) + 3) % 5]), "5").get();
+			insertKeys(portNumbers[(getIndex(myPort) + 3) % 5],reply);
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		} catch (ExecutionException e) {
@@ -215,25 +213,33 @@ public class SimpleDynamoProvider extends ContentProvider {
 		Log.e(TAG, "firstReplica = " + firstReplica);
 		int secondReplica = portNumbers[(getIndex(coOrdinate)+2) % 5];
 		Log.e(TAG, "secondReplica = " + secondReplica);
-		if(myPort == coOrdinate)
-			handleInsertMsg(coOrdinate,key,value);
-		else
-		{
-			new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(coOrdinate),"1" + coOrdinate + key + "_" + value);
+		try {
+			if(myPort == coOrdinate)
+				handleInsertMsg(coOrdinate,key,value);
+			else
+			{
+				new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(coOrdinate),"1" + coOrdinate + key + "_" + value).get();
+			}
+			if(myPort == firstReplica)
+				handleInsertMsg(coOrdinate,key,value);
+			else
+			{
+				//sendMsg(firstReplica,"1" + coOrdinate + key + "_" + value);
+				new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(firstReplica),"1" + coOrdinate + key + "_" + value).get();
+
+			}
+			if(myPort == secondReplica)
+				handleInsertMsg(coOrdinate,key,value);
+			else
+			{
+				//sendMsg(secondReplica,"1" + coOrdinate + key + "_" + value);
+				new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(secondReplica),"1" + coOrdinate + key + "_" + value).get();
+			}
 		}
-		if(myPort == firstReplica)
-			handleInsertMsg(coOrdinate,key,value);
-		else
-		{
-			//sendMsg(firstReplica,"1" + coOrdinate + key + "_" + value);
-			new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(firstReplica),"1" + coOrdinate + key + "_" + value);
-		}
-		if(myPort == secondReplica)
-			handleInsertMsg(coOrdinate,key,value);
-		else
-		{
-			//sendMsg(secondReplica,"1" + coOrdinate + key + "_" + value);
-			new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(secondReplica),"1" + coOrdinate + key + "_" + value);
+		catch (InterruptedException e) {
+		e.printStackTrace();
+		} catch (ExecutionException e) {
+			e.printStackTrace();
 		}
 	}
 
@@ -241,22 +247,29 @@ public class SimpleDynamoProvider extends ContentProvider {
 	{
 		Log.e(TAG, "Received Query Request  for Key = " + key);
 		int coOrdinate = findCoordinator(key);
-		Log.e(TAG, "Coordinatior for key is  = " + coOrdinate);
+
 		if(coOrdinate == myPort)
-			return findDataItem(key);
+			return findDataItem(String.valueOf(myPort),key);
 		String ret = null;
 		try {
+			Log.e(TAG, "Sending query req to Coordinatior for key" + key);
 			ret = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(coOrdinate),"2" + coOrdinate + key).get();
+			Log.e(TAG, "Returned Value from Coordinator for key  = " + key + "is  = "  + ret);
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		} catch (ExecutionException e) {
 			e.printStackTrace();
 		}
-		Log.e(TAG, "Returned Value from Coordinator = " + ret);
+
 		if(ret != null)
 		return ret;
+		int firstReplica = (getIndex(coOrdinate)+1) % 5;
+		if(firstReplica == myPort)
+			return findDataItem(String.valueOf(coOrdinate),key);
 		try {
-		ret = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf( portNumbers[(getIndex(coOrdinate)+1) % 5]),"2" + coOrdinate + key).get();
+		Log.e(TAG, "Sending query req to First replica for key" + key );
+		ret = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf( portNumbers[firstReplica]),"2" + coOrdinate + key).get();
+		Log.e(TAG, "Returned Value from First replica for key  = " + key + "is  = "  + ret);
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		} catch (ExecutionException e) {
@@ -271,9 +284,25 @@ public class SimpleDynamoProvider extends ContentProvider {
 		int coOrdinate = findCoordinator(key);
 		int firstReplica = portNumbers[(getIndex(coOrdinate)+1) % 5];
 		int secondReplica = portNumbers[(getIndex(coOrdinate)+2) % 5];
-		new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(coOrdinate),"3" + coOrdinate + key);
-		new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(firstReplica),"3" + coOrdinate + key);
-		new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(secondReplica),"3" + coOrdinate + key);
+		try {
+			if (coOrdinate == myPort)
+				deleteDataItem(coOrdinate, key);
+			else
+				new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, String.valueOf(coOrdinate), "3" + coOrdinate + key).get();
+			if (firstReplica == myPort)
+				deleteDataItem(coOrdinate, key);
+			else
+				new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, String.valueOf(firstReplica), "3" + coOrdinate + key).get();
+			if (secondReplica == myPort)
+				deleteDataItem(coOrdinate, key);
+			else
+				new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, String.valueOf(secondReplica), "3" + coOrdinate + key).get();
+		}
+		catch (InterruptedException e) {
+		e.printStackTrace();
+		} catch (ExecutionException e) {
+		e.printStackTrace();
+	}
 	}
 
 	private String readFromAllDataStore(String msg) {
@@ -319,6 +348,22 @@ public class SimpleDynamoProvider extends ContentProvider {
 			cursor.newRow().add(key).add(value);
 		}
 		return cursor;
+	}
+
+	private void insertKeys(int coordinator, String keys)
+	{
+		if(keys == null || keys.equals(""))
+			return;
+		String [] split =  keys.split("_");
+		for (int i = 0; (i+1) < split.length;) {
+			String key = split[i];
+			i++;
+			String value = split[i];
+			i++;
+			//Log.e(TAG,"Key : " + key + " Value: " + value);
+			handleInsertMsg(coordinator,key,value);
+		}
+
 	}
 
 	private int findCoordinator(String key)
@@ -416,15 +461,15 @@ public class SimpleDynamoProvider extends ContentProvider {
 		return sbMain.toString();
 	}
 
-	private String findDataItem(String key) {
+	private String findDataItem(String coordinator, String key) {
 		StringBuffer sb = new StringBuffer();
 		StringBuffer sbMain = new StringBuffer();
 				//Log.e(TAG,"Inside findDataItem");
 				MatrixCursor cursor = new MatrixCursor(new String[]{"key", "value"});
 				try {
 					FileInputStream inputStream;
-					Log.e(TAG, "Searching for File : " + myPort+ "_"+ key);
-					inputStream = getContext().openFileInput(myPort+ "_"+ key);
+					Log.e(TAG, "Searching for File : " + coordinator+ "_"+ key);
+					inputStream = getContext().openFileInput(coordinator+ "_"+ key);
 					if(inputStream == null)
 					{
 						Log.e(TAG, "File Not Found");
@@ -486,7 +531,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 						{
 							//String key =  msg.substring(2,2+Character.getNumericValue(msg.charAt(1)));
 							String key =  msg.substring(6);
-							reply =findDataItem(key);
+							reply =findDataItem(msg.substring(1,6),key);
 							PrintWriter pwMain = new PrintWriter(client.getOutputStream(), true);
 							pwMain.println(reply);
 						}
@@ -506,7 +551,12 @@ public class SimpleDynamoProvider extends ContentProvider {
 						PrintWriter pwMain = new PrintWriter(client.getOutputStream(), true);
 						pwMain.println(reply);
 					}
-
+					else if(msg.charAt(0) == '5')
+					{
+						reply = readFromLocalDataStoreReplica(String.valueOf(myPort));
+						PrintWriter pwMain = new PrintWriter(client.getOutputStream(), true);
+						pwMain.println(reply);
+					}
 				}
 			}catch (IOException e) {
 				e.printStackTrace();
@@ -515,7 +565,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 			return null;
 		}
 	}
-
+/*
 	private class ClientTask extends AsyncTask<String, Void, Void> {
 
 		@Override
@@ -538,7 +588,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 			return null;
 		}
 
-	}
+	}*/
 
 	private class ClientTaskValue extends AsyncTask<String, Void, String> {
 

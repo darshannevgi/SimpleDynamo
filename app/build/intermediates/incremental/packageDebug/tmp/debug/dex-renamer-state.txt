@@ -1,4 +1,4 @@
-#Sun May 12 11:24:32 EDT 2019
+#Sun May 12 15:16:10 EDT 2019
 base.0=/home/darshan/Downloads/SimpleDynamo/app/build/intermediates/dex/debug/mergeDexDebug/out
 path.0=classes.dex
 renamed.0=classes.dex
