@@ -10,6 +10,7 @@ import java.io.PrintWriter;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -67,11 +68,10 @@ public class SimpleDynamoProvider extends ContentProvider {
 		//Log.e(TAG, "Inside Content Provider Insert");
 		key = (String)values.get("key");
 		value = (String)values.get("value");
-		////Log.e(TAG, "Received Key = " + key + " Value=" + value);
+		Log.e(TAG, "Received Key = " + key + " Value=" + value);
 		insertData(key,value);
 		return uri;
 	}
-
 
 	@Override
 	public boolean onCreate() {
@@ -79,6 +79,29 @@ public class SimpleDynamoProvider extends ContentProvider {
 		TelephonyManager tel = (TelephonyManager) getContext().getSystemService(Context.TELEPHONY_SERVICE);
 		String portStr = tel.getLine1Number().substring(tel.getLine1Number().length() - 4);
 		myPort = (Integer.parseInt(portStr) * 2);
+		ServerSocket serverSocket = null;
+		try {
+			serverSocket = new ServerSocket(SERVER_PORT);
+		} catch (IOException e) {
+			Log.e(TAG, "Can't create a ServerSocket");
+			e.printStackTrace();
+		}
+		new ServerTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, serverSocket);
+		String myKeys = "";
+		//get own value from next node
+		try {
+			String reply = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, String.valueOf(portNumbers[(getIndex(myPort) + 1) % 5]), "4" + myPort).get();
+			if(reply != null)
+				myKeys = reply;
+			reply = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, String.valueOf(portNumbers[(getIndex(myPort) + 4) % 5]), "4" + myPort).get();
+
+			if(reply != null)
+				myKeys = myKeys + "_" + reply;
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		} catch (ExecutionException e) {
+			e.printStackTrace();
+		}
 		return true;
 	}
 
@@ -169,9 +192,10 @@ public class SimpleDynamoProvider extends ContentProvider {
 			return  1;
 		}*/
 
-/*	private void sendMsg(int receivePort, String msg) {
+	private void sendMsg(int receivePort, String msg) {
 		Socket socket;
 		try {
+			//Log.e(TAG, "receivePort " + msg+  "to " + receivePort);
 			socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
 					receivePort);
 			BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
@@ -181,48 +205,79 @@ public class SimpleDynamoProvider extends ContentProvider {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
-	}*/
+	}
 
 	private void insertData(String key, String value)
 	{
 		int coOrdinate = findCoordinator(key);
-		int firstReplica = (getIndex(coOrdinate)+1) % 5;
-		int secondReplica = (firstReplica +1 ) % 5;
-		new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(coOrdinate),"1" + coOrdinate + key + "_" + value);
-		new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(firstReplica),"1" + coOrdinate + key + "_" + value);
-		new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(secondReplica),"1" + coOrdinate + key + "_" + value);
+		Log.e(TAG, "Coordinator = " + coOrdinate);
+		int firstReplica = portNumbers[(getIndex(coOrdinate)+1) % 5];
+		Log.e(TAG, "firstReplica = " + firstReplica);
+		int secondReplica = portNumbers[(getIndex(coOrdinate)+2) % 5];
+		Log.e(TAG, "secondReplica = " + secondReplica);
+		if(myPort == coOrdinate)
+			handleInsertMsg(coOrdinate,key,value);
+		else
+		{
+			new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(coOrdinate),"1" + coOrdinate + key + "_" + value);
+		}
+		if(myPort == firstReplica)
+			handleInsertMsg(coOrdinate,key,value);
+		else
+		{
+			//sendMsg(firstReplica,"1" + coOrdinate + key + "_" + value);
+			new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(firstReplica),"1" + coOrdinate + key + "_" + value);
+		}
+		if(myPort == secondReplica)
+			handleInsertMsg(coOrdinate,key,value);
+		else
+		{
+			//sendMsg(secondReplica,"1" + coOrdinate + key + "_" + value);
+			new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(secondReplica),"1" + coOrdinate + key + "_" + value);
+		}
 	}
 
 	private String queryData(String key)
 	{
+		Log.e(TAG, "Received Query Request  for Key = " + key);
 		int coOrdinate = findCoordinator(key);
+		Log.e(TAG, "Coordinatior for key is  = " + coOrdinate);
 		if(coOrdinate == myPort)
 			return findDataItem(key);
+		String ret = null;
 		try {
-			return new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(coOrdinate),"2" + coOrdinate + key).get();
+			ret = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(coOrdinate),"2" + coOrdinate + key).get();
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		} catch (ExecutionException e) {
 			e.printStackTrace();
 		}
-		return null;
+		Log.e(TAG, "Returned Value from Coordinator = " + ret);
+		if(ret != null)
+		return ret;
+		try {
+		ret = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf( portNumbers[(getIndex(coOrdinate)+1) % 5]),"2" + coOrdinate + key).get();
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		} catch (ExecutionException e) {
+			e.printStackTrace();
+		}
+		Log.e(TAG, "Returned Value from Coordinator = " + ret);
+		return ret;
 	}
 
 	private void deleteData(String key)
 	{
 		int coOrdinate = findCoordinator(key);
-		int firstReplica = (getIndex(coOrdinate)+1) % 5;
-		int secondReplica = (firstReplica +1 ) % 5;
+		int firstReplica = portNumbers[(getIndex(coOrdinate)+1) % 5];
+		int secondReplica = portNumbers[(getIndex(coOrdinate)+2) % 5];
 		new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(coOrdinate),"3" + coOrdinate + key);
 		new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(firstReplica),"3" + coOrdinate + key);
 		new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(secondReplica),"3" + coOrdinate + key);
 	}
 
 	private String readFromAllDataStore(String msg) {
-		//Log.e(TAG, "Still not found position..Forwarding Req to Successor");
 		String reply  = null;
-		int receiverPort = Integer.parseInt(msg.substring(2,7));
-		//Log.e(TAG, "Sending read Request to :" + successorPort + " From: " + myPort);
 		String answer = "";
 		String localdataStore = readFromLocalDataStore();
 		if(localdataStore != null )
@@ -230,42 +285,37 @@ public class SimpleDynamoProvider extends ContentProvider {
 		Socket socket = null;
 			try {
 				for (int i = (getIndex(myPort)+1)%5; i!= getIndex(myPort); ) {
-					reply = new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(i),msg).get();
+					reply = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(portNumbers[i]), msg).get();
+					Log.e(TAG, "Received Reply for * = " + reply);
+
 					if(answer ==  null)
 						answer = reply;
-					if(reply != null )
+					else if(reply != null )
 						answer =  answer + "_"+ reply;
 					i = (i+1)% 5;
 				}
-
-			} catch (InterruptedException e) {
+			}catch (InterruptedException e) {
 				e.printStackTrace();
 			} catch (ExecutionException e) {
 				e.printStackTrace();
 			}
-
+		Log.e(TAG, "Answer for * = " + answer);
 		return  answer;
 	}
 
 	private Cursor stringToCursor(String msg, MatrixCursor cursor)
 	{
 		//Log.e(TAG,"Inside stringToCursor");
-		Log.e(TAG,"@ Result String After" + msg);
+		//Log.e(TAG,"@ Result String After" + msg);
 		if(msg == null || msg.equals(""))
 			return cursor;
 		String [] split =  msg.split("_");
 		for (int i = 0; (i+1) < split.length;) {
-
-            /*int keySize = Character.getNumericValue(msg.charAt(keylengthIndex)), keyStartIndex = keylengthIndex + 1, vallengthIndex = keyStartIndex+keySize;
-            int valSize = Character.getNumericValue(msg.charAt(vallengthIndex)),valStartIndex = vallengthIndex+1;
-            keylengthIndex = valStartIndex + valSize;
-            String key= msg.substring(keyStartIndex,keyStartIndex + keySize),value = msg.substring(valStartIndex, valStartIndex + valSize);
-           */
 			String key = split[i];
 			i++;
 			String value = split[i];
 			i++;
-			Log.e(TAG,"Key : " + key + " Value: " + value);
+			//Log.e(TAG,"Key : " + key + " Value: " + value);
 			cursor.newRow().add(key).add(value);
 		}
 		return cursor;
@@ -275,7 +325,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 	{
 		try {
 			String keyHash = genHash(key);
-			System.out.println("Key Hash " + keyHash);
+			//System.out.println("Key Hash " + keyHash);
 			if(keyHash.compareTo( genHash(String.valueOf(5562))) > 0 && keyHash.compareTo( genHash(String.valueOf(5556))) < 1)
 			{
 				return 5556*2;
@@ -312,7 +362,39 @@ public class SimpleDynamoProvider extends ContentProvider {
 		StringBuffer sbMain = new StringBuffer();
 		for (int j = 0; j < files.length; j++) {
 			try {
-				if(!files[j].getName().contains(String.valueOf(myPort)))
+				inputStream = getContext().openFileInput(files[j].getName());
+				int i;
+				while ((i = inputStream.read()) != -1) {
+					sb.append((char) i);
+				}
+				//Log.e(TAG,"Key: " + files[j].getName() + " Value: " +sb);
+				inputStream.close();
+			} catch (Exception e) {
+			}
+			sbMain.append(files[j].getName().split("_")[1]+ "_");
+			sbMain.append(sb + "_");
+			sb.setLength(0);
+		}
+		if(sbMain.length() > 0)
+		sbMain.setLength(sbMain.length()-1);
+		//Log.e(TAG,"@ Result String before" + sbMain);
+		//Log.e(TAG,"Whole Local Store String: " + sbMain);
+		return sbMain.toString();
+	}
+
+	private  String readFromLocalDataStoreReplica(String coOrdinator)
+	{
+		//Log.e(TAG,"Inside readFromLocalDataStore..reading from local Data Store");
+		File file = getContext().getFilesDir();
+		File[] files = file.listFiles();
+		if(files.length == 0)
+			return null;
+		FileInputStream inputStream;
+		StringBuffer sb = new StringBuffer();
+		StringBuffer sbMain = new StringBuffer();
+		for (int j = 0; j < files.length; j++) {
+			try {
+				if(!files[j].getName().contains(coOrdinator))
 					continue;
 				inputStream = getContext().openFileInput(files[j].getName());
 				int i;
@@ -323,16 +405,16 @@ public class SimpleDynamoProvider extends ContentProvider {
 				inputStream.close();
 			} catch (Exception e) {
 			}
-			sbMain.append(files[j].getName()+ "_");
+			sbMain.append(files[j].getName().split("_")[1]+ "_");
 			sbMain.append(sb + "_");
 			sb.setLength(0);
 		}
-		sbMain.setLength(sbMain.length()-1);
-		Log.e(TAG,"@ Result String before" + sbMain);
+		if(sbMain.length() > 0)
+			sbMain.setLength(sbMain.length()-1);
+		//Log.e(TAG,"@ Result String before" + sbMain);
 		//Log.e(TAG,"Whole Local Store String: " + sbMain);
 		return sbMain.toString();
 	}
-
 
 	private String findDataItem(String key) {
 		StringBuffer sb = new StringBuffer();
@@ -341,9 +423,14 @@ public class SimpleDynamoProvider extends ContentProvider {
 				MatrixCursor cursor = new MatrixCursor(new String[]{"key", "value"});
 				try {
 					FileInputStream inputStream;
+					Log.e(TAG, "Searching for File : " + myPort+ "_"+ key);
 					inputStream = getContext().openFileInput(myPort+ "_"+ key);
 					if(inputStream == null)
+					{
+						Log.e(TAG, "File Not Found");
 						return null;
+					}
+
 					int i;
 					while ((i = inputStream.read()) != -1) {
 						sb.append((char) i);
@@ -354,7 +441,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 				}
 				sbMain.append(key + "_");
 				sbMain.append(sb);
-				Log.e(TAG,"@ Result Before " +sbMain);
+				//Log.e(TAG,"@ Result Before " +sbMain);
 				return sbMain.toString();
 			}
 
@@ -367,14 +454,12 @@ public class SimpleDynamoProvider extends ContentProvider {
 			try {
 				while (true) {
 					Socket client = null;
-
+					//Log.e(TAG, "Server Socket Created");
 					client = serverSocket.accept();
-					//Log.e(TAG, "Server Accepted Request");
+					//Log.e(TAG, "Client Connection accepted");
 					BufferedReader br = new BufferedReader(new InputStreamReader(client.getInputStream()));
 					String msg;
 
-					// pw.println(msgToSend);
-					// Log.e(TAG, "Before Reading");
 					msg = br.readLine();
 					if(msg == null)
 						return null;
@@ -383,6 +468,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 					{}
 					else if(msg.charAt(0) == '1')
 					{
+						Log.e(TAG, "Received Insertion Message Inside Server: " + msg);
                         int coordinator = Integer.parseInt(msg.substring(1,6));
 						String split[] = msg.substring(6).split("_");
 						handleInsertMsg(coordinator,split[0],split[1]);
@@ -403,7 +489,6 @@ public class SimpleDynamoProvider extends ContentProvider {
 							reply =findDataItem(key);
 							PrintWriter pwMain = new PrintWriter(client.getOutputStream(), true);
 							pwMain.println(reply);
-
 						}
 						//insert msg
 
@@ -413,8 +498,13 @@ public class SimpleDynamoProvider extends ContentProvider {
 						int coordinator = Integer.parseInt(msg.substring(1,6));
 						String key =  msg.substring(6);
 						deleteDataItem(coordinator,key);
+					}
 
-						//insert msg
+					else if(msg.charAt(0) == '4')
+					{
+						reply = readFromLocalDataStoreReplica(msg.substring(1,6));
+						PrintWriter pwMain = new PrintWriter(client.getOutputStream(), true);
+						pwMain.println(reply);
 					}
 
 				}
@@ -426,20 +516,54 @@ public class SimpleDynamoProvider extends ContentProvider {
 		}
 	}
 
-	private class ClientTask extends AsyncTask<String, Void, String> {
+	private class ClientTask extends AsyncTask<String, Void, Void> {
+
+		@Override
+		protected Void doInBackground(String... msgs) {
+			try {
+				Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
+						Integer.parseInt(msgs[0]));
+				BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+				String inputLine;
+				Log.e(TAG, "Sending " + msgs[1] +  "to " + msgs[0]);
+				PrintWriter pw = new PrintWriter(socket.getOutputStream(), true);
+				pw.println(msgs[1]);
+			} catch (UnknownHostException e) {
+				Log.e(TAG, "ClientTask UnknownHostException");
+			} catch (IOException e) {
+				Log.e(TAG,e.getMessage());
+				Log.e(TAG, "ClientTask socket IOException");
+
+			}
+			return null;
+		}
+
+	}
+
+	private class ClientTaskValue extends AsyncTask<String, Void, String> {
 
 		@Override
 		protected String doInBackground(String... msgs) {
 			try {
 				Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
 						Integer.parseInt(msgs[0]));
+				socket.setSoTimeout(500);
 				BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 				String inputLine;
-				Log.e(TAG, "Sending " + msgs[1] +  UnknownHostException");
+				//Log.e(TAG, "Sending " + msgs[1] +  "to " + msgs[0]);
 				PrintWriter pw = new PrintWriter(socket.getOutputStream(), true);
 				pw.println(msgs[1]);
-				return in.readLine();
-			} catch (UnknownHostException e) {
+				inputLine = in.readLine();
+				if(inputLine != null)
+					return inputLine;
+
+			}catch (SocketTimeoutException e)
+			{
+				Log.e(TAG, "Socket Timeout happened");
+				return null;
+
+			}
+			catch (UnknownHostException e) {
 				Log.e(TAG, "ClientTask UnknownHostException");
 			} catch (IOException e) {
 				Log.e(TAG, "ClientTask socket IOException");
