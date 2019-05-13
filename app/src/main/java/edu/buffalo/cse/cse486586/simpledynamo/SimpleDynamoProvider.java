@@ -35,6 +35,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 	static final int SERVER_PORT = 10000;
 	int[] portNumbers = {11124,11112,11108,11116,11120};
 	private int myPort;
+	private boolean waiting = false;
 
 	private int getIndex(int port)
 	{
@@ -50,6 +51,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 		// TODO Auto-generated method stub
 		String key,value;
 		Log.e(TAG, "Inside Content Provider Insert");
+		while(waiting){}
 		deleteData(selection);
 		return 1;
 
@@ -69,6 +71,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 		key = (String)values.get("key");
 		value = (String)values.get("value");
 		Log.e(TAG, "Received Key = " + key + " Value=" + value);
+		while(waiting){}
 		insertData(key,value);
 		return uri;
 	}
@@ -79,6 +82,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 		TelephonyManager tel = (TelephonyManager) getContext().getSystemService(Context.TELEPHONY_SERVICE);
 		String portStr = tel.getLine1Number().substring(tel.getLine1Number().length() - 4);
 		myPort = (Integer.parseInt(portStr) * 2);
+
 		ServerSocket serverSocket = null;
 		try {
 			serverSocket = new ServerSocket(SERVER_PORT);
@@ -88,18 +92,30 @@ public class SimpleDynamoProvider extends ContentProvider {
 			e.printStackTrace();
 		}
 		new ServerTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, serverSocket);
+		//deleteFromLocalDataStore();
+		waiting = true;
+		Log.e(TAG, "Set Waiting flag true");
+		Log.e(TAG, "Recovery mode on");
 		try {
 			String reply = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, String.valueOf(portNumbers[(getIndex(myPort) + 1) % 5]), "4" + myPort).get();
-			insertKeys(portNumbers[(getIndex(myPort) + 1) % 5],reply);
+			Log.e(TAG, "Received Reply " + reply);
+			insertKeys(myPort,reply);
+			Log.e(TAG, "Received Reply " + reply);
 			reply = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, String.valueOf(portNumbers[(getIndex(myPort) + 4) % 5]), "5").get();
 			insertKeys(portNumbers[(getIndex(myPort) + 4) % 5],reply);
+			Log.e(TAG, "Received Reply " + reply);
 			reply = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, String.valueOf(portNumbers[(getIndex(myPort) + 3) % 5]), "5").get();
 			insertKeys(portNumbers[(getIndex(myPort) + 3) % 5],reply);
 		} catch (InterruptedException e) {
+			Log.e(TAG, "InterruptedException");
 			e.printStackTrace();
+
 		} catch (ExecutionException e) {
+			Log.e(TAG, "ExecutionException");
 			e.printStackTrace();
 		}
+		Log.e(TAG, "Set Waiting flag False");
+		waiting  = false;
 		return true;
 	}
 
@@ -107,6 +123,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 	public Cursor query(Uri uri, String[] projection, String selection,
 						String[] selectionArgs, String sortOrder) {
 		// TODO Auto-generated method stub
+		while(waiting){}
 		if(selection.contains("@"))
 			return stringToCursor(readFromLocalDataStore(),new MatrixCursor(new String[]{"key", "value"}));
 		else if(selection.contains("*"))
@@ -150,6 +167,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 	}
 
 	private int deleteDataItem(int coordinator,String key) {
+		while(waiting){}
 				File dir = getContext().getFilesDir();
 				for(File file: dir.listFiles())
 					if (!file.isDirectory() && file.getName().equals(coordinator + "_" + key))
@@ -157,14 +175,14 @@ public class SimpleDynamoProvider extends ContentProvider {
 				return 1;
 	}
 
-/*	private int deleteFromLocalDataStore() {
+	private int deleteFromLocalDataStore() {
 		File dir = getContext().getFilesDir();
 		for(File file: dir.listFiles())
 			if (!file.isDirectory())
 				file.delete();
 		return 1;
 	}
-
+/*
 	private int deleteFromAllDataStore(String msg) {
 			//Log.e(TAG, "Still not found position..Forwarding Req to Successor");
 			String reply = "";
@@ -262,13 +280,18 @@ public class SimpleDynamoProvider extends ContentProvider {
 		}
 
 		if(ret != null)
-		return ret;
-		int firstReplica = (getIndex(coOrdinate)+1) % 5;
+		{
+			Log.e(TAG, "Return Value: "+ ret );
+			return ret;
+		}
+		Log.e(TAG, "Return value null hence continuing" );
+		int firstReplica = portNumbers[(getIndex(coOrdinate)+1) % 5];
+		Log.e(TAG, "firstReplica = "+ firstReplica + "My Port Number" + myPort );
 		if(firstReplica == myPort)
 			return findDataItem(String.valueOf(coOrdinate),key);
 		try {
 		Log.e(TAG, "Sending query req to First replica for key" + key );
-		ret = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf( portNumbers[firstReplica]),"2" + coOrdinate + key).get();
+		ret = new ClientTaskValue().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,String.valueOf(firstReplica),"2" + coOrdinate + key).get();
 		Log.e(TAG, "Returned Value from First replica for key  = " + key + "is  = "  + ret);
 		} catch (InterruptedException e) {
 			e.printStackTrace();
@@ -398,6 +421,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 	private  String readFromLocalDataStore()
 	{
 		//Log.e(TAG,"Inside readFromLocalDataStore..reading from local Data Store");
+		while(waiting){}
 		File file = getContext().getFilesDir();
 		File[] files = file.listFiles();
 		if(files.length == 0)
@@ -462,6 +486,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 	}
 
 	private String findDataItem(String coordinator, String key) {
+		while(waiting){}
 		StringBuffer sb = new StringBuffer();
 		StringBuffer sbMain = new StringBuffer();
 				//Log.e(TAG,"Inside findDataItem");
@@ -513,6 +538,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 					{}
 					else if(msg.charAt(0) == '1')
 					{
+						while(waiting){}
 						Log.e(TAG, "Received Insertion Message Inside Server: " + msg);
                         int coordinator = Integer.parseInt(msg.substring(1,6));
 						String split[] = msg.substring(6).split("_");
@@ -520,7 +546,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 					}
 					else if(msg.charAt(0) == '2')
 					{
-							
+						while(waiting){}
 						if(msg.charAt(1) == '*')
 						{
 							reply = readFromLocalDataStore();
@@ -530,8 +556,10 @@ public class SimpleDynamoProvider extends ContentProvider {
 						else
 						{
 							//String key =  msg.substring(2,2+Character.getNumericValue(msg.charAt(1)));
+							Log.e(TAG,"Request Received at server for Query ");
 							String key =  msg.substring(6);
 							reply =findDataItem(msg.substring(1,6),key);
+							Log.e(TAG,"Reply from server for Query  = " + reply);
 							PrintWriter pwMain = new PrintWriter(client.getOutputStream(), true);
 							pwMain.println(reply);
 						}
@@ -540,6 +568,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 					}
 					else if(msg.charAt(0) == '3')
 					{
+						while(waiting){}
 						int coordinator = Integer.parseInt(msg.substring(1,6));
 						String key =  msg.substring(6);
 						deleteDataItem(coordinator,key);
@@ -547,18 +576,23 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 					else if(msg.charAt(0) == '4')
 					{
+						Log.e(TAG,"Request Received for recovery");
 						reply = readFromLocalDataStoreReplica(msg.substring(1,6));
 						PrintWriter pwMain = new PrintWriter(client.getOutputStream(), true);
 						pwMain.println(reply);
+						Log.e(TAG,"Reply :" + reply);
 					}
 					else if(msg.charAt(0) == '5')
 					{
+						Log.e(TAG,"Request Received for recovery");
 						reply = readFromLocalDataStoreReplica(String.valueOf(myPort));
 						PrintWriter pwMain = new PrintWriter(client.getOutputStream(), true);
 						pwMain.println(reply);
+						Log.e(TAG,"Reply :" + reply);
 					}
 				}
 			}catch (IOException e) {
+				Log.e(TAG,"Fatal Error at Server");
 				e.printStackTrace();
 			}
 
@@ -595,16 +629,18 @@ public class SimpleDynamoProvider extends ContentProvider {
 		@Override
 		protected String doInBackground(String... msgs) {
 			try {
+				Log.e(TAG, "Sending " + msgs[1] +  "to " + msgs[0]);
 				Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
 						Integer.parseInt(msgs[0]));
-				socket.setSoTimeout(500);
+				socket.setSoTimeout(1000);
 				BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 				String inputLine;
 				//Log.e(TAG, "Sending " + msgs[1] +  "to " + msgs[0]);
 				PrintWriter pw = new PrintWriter(socket.getOutputStream(), true);
 				pw.println(msgs[1]);
 				inputLine = in.readLine();
-				if(inputLine != null)
+				Log.e(TAG,"Reply Recieived in client" + inputLine);
+				if(inputLine != null && !inputLine.equals("null"))
 					return inputLine;
 
 			}catch (SocketTimeoutException e)
@@ -615,9 +651,10 @@ public class SimpleDynamoProvider extends ContentProvider {
 			}
 			catch (UnknownHostException e) {
 				Log.e(TAG, "ClientTask UnknownHostException");
+				return null;
 			} catch (IOException e) {
 				Log.e(TAG, "ClientTask socket IOException");
-
+				return null;
 			}
 			return null;
 		}

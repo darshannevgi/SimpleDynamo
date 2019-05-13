@@ -8,6 +8,12 @@ public class Testing {
     private static final int[] portArray ={5554,5556,5558,5560,5562};
     public static void main(String args[])
     {
+
+        String s = "null";
+        if(s != null)
+            System.out.print("String is not null");
+        else
+            System.out.print("String is null");
         for (int i :portArray) {
             try {
                 System.out.println(i + " = " + genHash(i+""));
@@ -15,7 +21,7 @@ public class Testing {
                 e.printStackTrace();
             }
         }
-        System.out.print("My Coordinator : " + findCoordinator("32GbSHSmgjRLq6cjBA9doo3A6haua1c2"));
+        System.out.print("My Coordinator : " + findCoordinator("na6RJVA4ilKYFgooULK91AcW00kSY7bw"));
 
 
     }
